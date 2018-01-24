@@ -1,0 +1,472 @@
+This is the html version of the file
+http://sydney.edu.au/engineering/it/~zhouy/info5011/doc/INFO5011CloudComputingMapReduceII.pdf.
+*Google* automatically generates html versions of documents as we crawl
+the web.
+UNIS Template
+*Page 1*
+
+INFO5011
+Cloud Computing
+Semester 2, 2011
+Lecture 7, MapReduce (II)
+*COMMONWEALTH OF*
+*Copyright Regulations 1969*
+*WARNING*
+This material has been reproduced and communicated to
+you by or on behalf of the university of Sydney pursuant to Part
+VB of the Copyright Act 1968 (*the Act*).
+The material in this communication may be subject
+to copyright under the Act. Any further reproduction or
+communication of this material by you may be the
+subject of copyright protection under the Act.
+*Do not remove this notice.*
+------------------------------------------------------------------------
+*Page 2*
+
+Outline
+› Counter
+› Table join
+- Multiple Inputs
+- Secondary sort
+- Grouping Comparator
+› DistributedCache
+› Map side join
+› Fault Tolerance and other features
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+2
+------------------------------------------------------------------------
+*Page 3*
+
+A typical job status output
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+3
+------------------------------------------------------------------------
+*Page 4*
+
+Counters
+› Counters are a useful channel for gathering statistics about the job: for
+quality control, or for application level-statistics
+› Hadoop has many build-in counters to track
+- E.g.: Spilled Records: Map(355,671), Reduce(91,650)
+Map output records(11,760,740), Reduce Input groups (72,220)
+› Developer can include application-level statics as well
+- E.g: number of bad(incomplete records), number of words containing
+non-ascii
+characters.
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+4
+------------------------------------------------------------------------
+*Page 5*
+
+Writing a simple custom counter
+*public class TagReducerWCounter extends*
+Reducer<Text, IntWritable, Text, IntWritable> {
+*private IntWritable result = new IntWritable();*
+*private final static int /MINFREQ = 5;/*
+*private enum language{/FOREIGN};/*
+*static CharsetEncoder /asciiEncoder =
+Charset.forName("US-ASCII").newEncoder();/*
+*public void reduce(Text key, Iterable<IntWritable> values,*
+Context context) *throws IOException, InterruptedException {*
+*if (!/asciiEncoder.canEncode(key.toString()))/*
+context.getCounter(language./FOREIGN).increment(1);/
+*int sum = 0;*
+*for (IntWritable val : values) {*
+sum += val.get();
+}
+*if (sum > /MINFREQ){ //only emit when sum is bigger than the threshold/*
+result.set(sum);
+context.write(key, result);
+}
+}
+}
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+5
+------------------------------------------------------------------------
+*Page 6*
+
+A table join example
+› Two input sources
+- *Photo*: user \t \date \t place_id \n
+- *Geo*: place_id \t woeid \t lat \t longi \t place_name \t place_url
+› Output:
+- Place_id \t user \t date \t place_name1
+- Place_id \t user \t date \t place_name2
+› This is like joining two tables on key place_id
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+6
+Map:
+photo record -> (*k*:place_id, *v*: user \t date)
+Geo record ->(*k*:place_id, *v: *place_name)
+Reduce:
+(*k*:place_id,*v*:(*place_name*, user1 \t date1, user2 \t date2)) ->
+(*K*:place_id, *v*: user1 \t date1 \t *place_name*),
+(*K*:place_id, *v*: user2 \t date2 \t *place_name*),
+------------------------------------------------------------------------
+*Page 7*
+
+How do we implement “Join” in Hadoop
+› Several new features
+- Multiple inputs with different formats and hence different Mappers
+- There should be a way to identify values coming from various input in
+the values
+list passed to a same reduce function
+- One easy way is to order the, in a particular way
+- Value from the Geo table, which contains the place name should be the
+first in
+the value list
+› Multiple input is supported in Hadoop framework
+› Value lists are grouped based on key
+- Need a way to “tag” the key to differentiate keys from different input
+data
+- Need special handling to ensure the tagged keys maintain their
+original partition
+position and the values from the say key are grouped as a list to send
+to the
+same reduce function
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+7
+------------------------------------------------------------------------
+*Page 8*
+
+Example of join execution
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+8
+Mapper 1
+Mapper 2
+Mapper 3
+u1,d1,p1
+u2,d2,p2
+u3,d3,p3
+u1,d2,p2
+u4,d1,p3
+u2,d4,p4
+p1: Sydney
+p2: Boston
+p3: Beijing
+Reducer 0
+Reducer 1
+*p1*:sydney
+*p1*: u1,d1
+*p2*: Boston
+*p2 *u2,d2
+*p2*:u1,d2
+*p2*: u1,d2
+*p3*: u4,d1
+*p4*: u2,d4
+*p1*: u1,d1
+*p2*: u2,d2
+*p3*: u3,d3
+*p1*: Sydney
+*p2*: Boston
+*p3*: Beijing
+*p3*: Beijing
+*p3*: u3,d3
+*p3*:u4,d1
+*p4*: u2,d4
+*p1*: u1,d1,Sydney
+*p2*: u2,d2,Boston
+*p2*: u1,d2, Boston
+*p3*: u3,d3,Beijing
+*p3*: u4,d1, Beijing
+*p4*:u2,d4, NULL
+Ideal order to be received by
+all reducers
+A partition for a mapper
+A grouping for a reduce function
+Another grouping for another call of the
+reduce function
+------------------------------------------------------------------------
+*Page 9*
+
+Composite key
+› We want to sort the map output based
+on key as well as where it comes from
+- Tag the key with additional information to
+indicate where the (key,value) pair comes
+from.
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+9
+The order of reducer input is
+determined by its output key’s
+Comparator;
+The allocation of output key to
+partition is determined by a given
+or default Partitioner
+The grouping of key value pairs
+for each call of reduce function is
+determined by a grouping
+comparator; if not specified, the
+output key’s Comparator is
+used.
+Mapper 1
+*p1,1*: u1,d1
+*p2,1*: u2,d2
+*p3,1*: u3,d3
+Mapper 3
+*P1,0*: Sydney
+*p2,0*: Boston
+*p3,0*: Beijing
+*p1,0*:sydney
+*p1,1*: u1,d1
+*p2,0*: Boston
+*p2,1 *:u2,d2
+*p2,1*:u1,d2
+Sort by original key, then by the tag
+Using default partitioner, there is no guarantee that composite
+keys (*p1,0*) and (*p1,1*) go to the same partition, or composite
+keys (*p2,0*) and (*p2,1*) go to the same partition
+------------------------------------------------------------------------
+*Page 10*
+
+Custom Partitioner and Grouping Comparator
+› We should sort all input based on composite key’s comparator which takes
+into account both the original key and the additional tag
+› We should /partition /and /grouping /based on the original key only
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+10
+Mapper 1
+*p1,1*: u1,d1
+*p2,1*: u2,d2
+*p3,1*: u3,d3
+Mapper 3
+*P1,0*: Sydney
+*p2,0*: Boston
+*p3,0*: Beijing
+*p1,0*:sydney
+*p1,1*: u1,d1
+*p2,0*: Boston
+*p2,1 *:u2,d2
+*p2,1*:u1,d2
+Partitioner(key)
+Sorting (key+tag)
+*p1,0 *-> (sydney,
+<u1,d1>)
+*p2,0 *-> (Boston,
+<u2,d2>,
+<u1,d2>)
+*reducer*
+*reduce functions*
+Grouping (key)
+------------------------------------------------------------------------
+*Page 11*
+
+The Composite Key
+*public class TextIntPair implements WritableComparable<TextIntPair>{*
+*private Text key;*
+*private IntWritable order;*
+//*standard accessor methods for the private fields are omitted; default
+constructor is omitted*
+*public TextIntPair(String key, int order){*
+*this.key = new Text(key);this.order = new IntWritable(order);*
+}
+*//serializing and deserializing methods*
+*public void readFields(DataInput in) throws IOException
+{*key.readFields(in);order.readFields(in);}
+*public void write(DataOutput out) throws IOException
+{*key.write(out);order.write(out);}
+*public int compareTo(TextIntPair other) {*
+*int cmp = key.compareTo(other.key);*
+*if (cmp != 0) {return cmp;*}
+*return order.compareTo(other.order);*
+}
+*public int hashCode() {return key.hashCode() * 163 + order.get();*}
+*public boolean equals(Object other) {*
+*if (other instanceof TextIntPair) {*
+TextIntPair tip = (TextIntPair) other;
+*return key.equals(tip.key) && order.equals(tip.order);*
+}
+*return false;*
+}
+}
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+11
+Methods to compare two keys
+------------------------------------------------------------------------
+*Page 12*
+
+Partitioner and Group Comparator
+*public class JoinPartitioner implements Partitioner<TextIntPair,Text> {*
+*public int getPartition(TextIntPair key, Text value, int numPartition) {*
+*return (key.getKey().hashCode() * 123) % numPartition;*
+}
+*public void configure(JobConf arg0) {*
+}
+}
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+12
+*public class JoinGroupComparator extends WritableComparator {*
+*protected JoinGroupComparator() {super(TextIntPair.class,true);*}
+/**
+* Only compare the key when grouping reducer input together
+*/
+*public int compare(WritableComparable w1, WritableComparable w2) {*
+TextIntPair tip1 = (TextIntPair) w1;
+TextIntPair tip2 = (TextIntPair) w2;
+*return tip1.getKey().compareTo(tip2.getKey());*
+}
+}
+------------------------------------------------------------------------
+*Page 13*
+
+Distributing Auxiliary Job data
+› Auxiliary job data
+- In general a small file contains common background knowledge for
+processing
+map jobs
+- E.g. the stop word list for word counting, the dictionary for spelling
+check
+- All mappers need to read it
+- The file is small enough to fit in the memory of mappers
+› Hadoop provides a mechanism for this purpose called the distributed
+cache.
+- In old API, use the class called *DistributedCache *to distribute
+those files to
+all tasktrackers
+- In new API, use methods in *Job *class to set and get cache files
+› Distributed cache can be used to provide an alternative, more
+efficient join
+if one join table is small enough to fit in the memory
+- Only the map stage is needed, sometimes called replicated join
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+13
+------------------------------------------------------------------------
+*Page 14*
+
+DistributedCache
+*public static class ReplicatedJoinMapper extends MapReduceBase*
+*implements Mapper<Text, Text, Text, Text> {*
+*private enum Place {/AUSTRALIA, OTHER};/*
+*private Hashtable <String, String> placeTable = new Hashtable<String,
+String>();*
+*public void configure(JobConf job){*
+*try{*
+Path[] cacheFiles = DistributedCache./getLocalCacheFiles(job);/
+*if (cacheFiles != null && cacheFiles.length > 0) {*
+String line;
+String[] tokens;
+BufferedReader placeReader =
+*new BufferedReader(new FileReader(cacheFiles[0].toString()));*
+*try {*
+*while ((line = placeReader.readLine()) != null) {*
+tokens = line.split("\t");
+placeTable.put(tokens[0], tokens[4]);
+}
+System./out.println("size of the place table is: " + placeTable.size());/
+}
+*finally {*
+placeReader.close();
+}
+}
+} *catch (IOException e) {*
+System./err.println("Exception reading DistributedCache:" + e);/
+}
+}
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+14
+------------------------------------------------------------------------
+*Page 15*
+
+DistributedCache
+*public void map(Text key, Text value,*
+OutputCollector<Text, Text> output, Reporter reporter)
+*throws IOException {*
+String[] dataArray = value.toString().split("\t");
+String placeId = dataArray[1];
+String placeName = placeTable.get(placeId);
+*if (placeName != null){*
+output.collect(key, *new Text(dataArray[0]+ "\t" + placeName));*
+reporter.incrCounter(Place./AUSTRALIA,1);/
+}*else{*
+reporter.incrCounter(Place./OTHER, 1);/
+}
+}
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+15
+------------------------------------------------------------------------
+*Page 16*
+
+DistributedCache
+*public int run(String[] args) throws Exception {*
+Configuration conf = getConf();
+JobConf job = *new JobConf(conf, ReplicatedJoin.class);*
+DistributedCache./addCacheFile(*new*/
+/*Path("/user/zhouy/australia.txt").toUri(), job);*/
+Path in = *new Path(args[0]);*
+Path out = *new Path(args[1]);*
+FileInputFormat./setInputPaths(job, in);/
+FileOutputFormat./setOutputPath(job, out);/
+job.setJobName("Replicated Join with DistributedCache");
+job.setMapperClass(ReplicatedJoinMapper.*class);*
+job.setNumReduceTasks(0);
+job.setInputFormat(KeyValueTextInputFormat.*class);*
+job.setOutputFormat(TextOutputFormat.*class);*
+JobClient./runJob(job);/
+*return 0;*
+}
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+16
+------------------------------------------------------------------------
+*Page 17*
+
+Map side join
+› A map-side join works by performing the join before the data reaches the
+map function.
+› Special requirement for input data
+- Each input dataset must be divided into the same number of partitions
+- It must be sorted by the same key (the join key) in each source.
+- All the records for a particular key must reside in the same partition.
+› A map-side join can be used to join the outputs of several jobs that
+had the
+same number of reducers, the same keys, and output files that are not
+splittable
+› There are special Hadoop classes for handling this type of Join
+- CompositeInputFormat from org.apache.hadoop.mapred.join package
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+17
+------------------------------------------------------------------------
+*Page 18*
+
+Fault Tolerance and other features
+›Worker failure
+- Detected by master through periodic pings
+- Handled via re-execution
+- Redo in-progress or completed map tasks
+- Redo in-progress reduce tasks
+- Map/reduce tasks committed through master
+›Master failure
+- Not covered in original implementation
+- Could be detected by user program or monitor
+- Could recover persistent state from disk
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+18
+------------------------------------------------------------------------
+*Page 19*
+
+Fault Tolerance and other features
+› Backup tasks
+- Straggler: worker that takes unusually long to finish task
+- Possible causes include bad disks, network issues, overloaded machines
+- Near the end of the map/reduce phase, master spawns backup copies of
+remaining tasks
+- Use workers that completed their task already
+- Whichever finishes first “wins”
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+19
+------------------------------------------------------------------------
+*Page 20*
+
+Your turn
+› Add a counter to the join program to count
+- the number of place_ids that appear in the photo table but not the
+place table
+- The number of place_ids that appear in the place table but not the
+photo table
+› Find all photos in *n08_all.txt *that were taken in China
+- Try the reduce-side join option
+- Try the distributed cache option
+- Extract all place_ids related with China
+- Distribute the result to all mapper tasks
+- Compare the performance
+INFO5011 "Cloud Computing" - 2011 (U. Röhm and Y. Zhou)
+20
